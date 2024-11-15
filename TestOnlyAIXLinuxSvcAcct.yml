@@ -1,0 +1,40 @@
+integrations:
+  - name: nri-flex
+    interval: 86400  # Set the interval to 86400 seconds (1 day)
+    config:
+      name: custom_csv_integration
+      timeout: 60000
+      apis:
+        - name: TestOnlyAIXLinuxSvcAcct2 # This will be the event type in New Relic
+          shell: powershell
+          commands:
+            - run: |
+                $content = Get-Content -Path 'C:\Program Files\New Relic\newrelic-infra\integrations.d\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_20241106.csv'
+                $processedContent = $content -replace '","', '::' -replace '^\s*\"', '' -replace '\"\s*$', ''
+                $filteredContent = $processedContent | Where-Object { 
+                    $_ -notmatch '^Hostname' -and 
+                    $_ -notmatch 'assword:' -and 
+                    $_ -notmatch 'You are required to change your password immediately' -and 
+                    $_ -notmatch '^\s*$' 
+                }
+                $processedContentString = $filteredContent -join "`n"
+                $processedContentString
+              split: horizontal
+              split_by: '::'
+              row_start: 0
+              set_header: [hostName, ipAddress, userId, passwordExpiration, lastPasswordChange, passwordEnabled, acctDesc, sudoRight, osVersion, lastLoginDate, passwordStatus, accountStatus, uid, gid]
+            - run: |
+                $content = Get-Content -Path 'C:\Program Files\New Relic\newrelic-infra\integrations.d\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_20241106_part2.csv'
+                $processedContent = $content -replace '","', '::' -replace '^\s*\"', '' -replace '\"\s*$', ''
+                $filteredContent = $processedContent | Where-Object { 
+                    $_ -notmatch '^Hostname' -and 
+                    $_ -notmatch 'assword:' -and 
+                    $_ -notmatch 'You are required to change your password immediately' -and 
+                    $_ -notmatch '^\s*$' 
+                }
+                $processedContentString = $filteredContent -join "`n"
+                $processedContentString
+              split: horizontal
+              split_by: '::'
+              row_start: 0
+              set_header: [hostName, ipAddress, userId, passwordExpiration, lastPasswordChange, passwordEnabled, acctDesc, sudoRight, osVersion, lastLoginDate, passwordStatus, accountStatus, uid, gid]
