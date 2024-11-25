@@ -18,10 +18,8 @@ $errorFilePath = "$workingDir\Logs" # path to where $errorFileName will be saved
 $logFileName = "$logFilePath\$([System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)).$(Get-Date -Format 'yyyyMMddHHmm').log" # name of the file to contain New Relic response (+ other things but later)
 $errorFileName = "$errorFilePath\$([System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)).$(Get-Date -Format 'yyyyMMddHHmm').err" # name of the file to contain request error (+ other things but later)
 $scriptName = [System.IO.Path]::GetFileName($PSCommandPath) # name of this script
-$tasks = @(
-    @{ Name = "Maxage Report"; Attributes = @("Last Run Time", "Last Result") }, # task in Windows Task Scheduler that creates the 1st part of data ($csvPath1)
-    @{ Name = "Maxage report pt.2"; Attributes = @("Last Run Time", "Last Result") } # task in Windows Task Scheduler that creates the 2nd part of data ($csvPath2)
-)
+$task1Name = "Maxage Report"
+$task2Name = "Maxage report pt.2"
 
 # Function to send data to New Relic
 function Send-AcctDetailsToNewRelic {
@@ -52,25 +50,6 @@ function Send-AcctDetailsToNewRelic {
     }
 }
 
-# Function to get Windows Task Scheduler task details
-function Get-TaskDetails {
-    param (
-        [string]$taskName,
-        [string[]]$attributes
-    )
-
-    $taskDetails = schtasks /query /fo LIST /v /tn $taskName
-    $result = @{}
-
-    foreach ($attribute in $attributes) {
-        $line = $taskDetails | Select-String -Pattern "$($attribute):"
-        $value = $line -split ":\s+" | Select-Object -Last 1
-        $result[$attribute] = $value
-    }
-
-    return $result
-}
-
 # Function to clean and then filter CSV content
 function Process-CSVContent {
     param (
@@ -80,10 +59,14 @@ function Process-CSVContent {
         $content = Get-Content -Path $path
         $processedContent = $content -replace '","', '::' -replace '^\s*\"', '' -replace '\"\s*$', '' # replace comma separator with '::'and remove leading and trailing spaces
         $filteredContent = $processedContent | Where-Object { # filter out headers and other non-acct data
-            $_ -notmatch '^Hostname' -and 
-            $_ -notmatch 'assword:' -and 
-            $_ -notmatch 'You are required to change your password immediately' -and 
-            $_ -notmatch '^\s*$' 
+            $_ -notmatch '^Hostname' -and
+            $_ -notmatch 'assword:' -and
+            $_ -notmatch 'You are required to change your password immediately' -and
+            $_ -notmatch '^\s*$' -and
+            $_ -notmatch 'YOU HAVE NEW MAIL' -and
+            $_ -notmatch '^\[' -and
+            $_ -notmatch 'Generating list of' -and
+            $_ -notmatch 'check in progress'
         }
         return $filteredContent -join "`n"
     } catch {
@@ -141,7 +124,6 @@ if (-not $apiKey) {
     Write-Host "Error: Environment variable for $environment is not set."
     exit 1
 }
-
 #echo "apiKey: $apiKey" # debug script
 #echo "nrEnv: $nrEnv" # debug script
 
@@ -154,25 +136,42 @@ if ($args.Count -eq 2 -and $args -eq 'test') {
 $startTime = Get-Date # Start timer (to compute durationInSeconds)
 $errorMessages = @()
 $allAcctDetails = @()
-$processedContent1 = Process-CSVContent -path $csvPath1
-$processedContent2 = Process-CSVContent -path $csvPath2
+
+try {
+    $processedContent1 = Process-CSVContent -path $csvPath1
+    $processedContent2 = Process-CSVContent -path $csvPath2
+} catch {
+    if (-not (Test-Path $csvPath1)) {
+        Write-Output "The path $csvPath1 does not exist."
+    } elseif (-not (Test-Path $csvPath2)) {
+        Write-Output "The path $csvPath2 does not exist."
+    } else {
+        Write-Output "Something happened, exiting the script: $_"
+    }
+    exit 1
+}
+
 $combinedContent = $processedContent1 + "`n" + $processedContent2
 $lines = $combinedContent -split "`n"; $lines | Out-File -FilePath $outputPath -Encoding UTF8
 #echo "lines: $lines" # debug script
 #echo "lines.Length: $($lines.Length)" # debug script
 
-# Get exit code and last run time of Windows Scheduler tasks that produces the service account expiry details
-$taskDetails = ""
-foreach ($task in $tasks) {
-    $taskName = $task.Name
-    $attributes = $task.Attributes
-    $details = Get-TaskDetails -taskName $taskName -attributes $attributes
+# Get Last Result (exit code) and Last Run Time of Windows Scheduler tasks that produces the 2 service account expiry files
+$lastResultTask1 = ""
+$lastRunTimeTask1 = ""
+$schTask1Details = schtasks /query /fo LIST /v /tn $task1Name
+$lastResultTask1 = ($schTask1Details | Select-String -Pattern "Last Result:") -split ":\s+" | Select-Object -Last 1
+$lastRunTimeTask1 = ($schTask1Details | Select-String -Pattern "Last Run Time:") -split ":\s+" | Select-Object -Last 1
+#echo "lastResultTask1: $lastResultTask1" # debug script
+#echo "lastRunTimeTask1: (Get-Date $lastRunTimeTask1).ToString("yyyy-MM-dd")" # debug script
 
-    # Append the details to the string
-    foreach ($attribute in $attributes) {
-        $taskDetails += "$($taskName) - $($attribute): $($details[$attribute])`n"
-    }
-}
+$lastResultTask2 = ""
+$lastRunTimeTask2 = ""
+$schTask2Details = schtasks /query /fo LIST /v /tn $task2Name
+$lastResultTask2 = ($schTask2Details | Select-String -Pattern "Last Result:") -split ":\s+" | Select-Object -Last 1
+$lastRunTimeTask2 = ($schTask2Details | Select-String -Pattern "Last Run Time:") -split ":\s+" | Select-Object -Last 1
+#echo "lastResultTask2: $lastResultTask2" # debug script
+#echo "lastRunTimeTask2: (Get-Date $lastRunTimeTask2).ToString("yyyy-MM-dd")" # debug script
 
 # Check each line of the max age data and filter out non-data and non-expiring accounts
 $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
@@ -180,18 +179,19 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
     $fields = $_ -split '::'
 
     $hostName = $fields[0]
-    Write-Host "hostName: $hostName" # debug script
+    #Write-Host "hostName: $hostName" # debug script
 
     # Extract relevant fields
     $accountStatus = $fields[11]
     $osVersion = $fields[8]
-    $passwordExpiration = [int]$fields[3].Trim()
+    #Write-Host "fields[3]: $($fields[3])" # debug script
+    $passwordExpiration = [int]$($fields[3]).Trim()
 
     # Skip lines based on the specified condition
     if (($accountStatus -notlike '*Active*') -or 
         (($osVersion -like '*Linux*' -or $osVersion -like '*Ubuntu*') -and $passwordExpiration -ne 365) -or 
         ($osVersion -like '*AIX*' -and $passwordExpiration -ne 52)) {
-        Write-Host "Skipping line due to condition: $_"
+        Write-Host "Skipping this line: $($_.ToString())"
         return
     }
 
@@ -218,7 +218,6 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
         Write-Host "Skipping line with passwordExpiration: $passwordExpiration"
         return
     }
-
     #Write-Host "fields[8]: $($fields[8])" # debug script
 
     # Calculate the valid days
@@ -246,12 +245,16 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
         ipAddress = $fields[1]
         userId = $fields[2]
         passwordExpiration = $fields[3]
-        lastPasswordChange = $fields[4]
+        lastPasswordChange = [datetime]::ParseExact($fields[4], "dd-MMM-yyyy", $null).ToString("yyyy-MM-dd")
+        accountDesc = $fields[6]
         osVersion = $osVersion
+        lastResultTask1 = $lastResultTask1
+        lastRunTimeTask1 = (Get-Date $lastRunTimeTask1).ToString("yyyy-MM-dd")
+        lastResultTask2 = $lastResultTask2
+        lastRunTimeTask2 = (Get-Date $lastRunTimeTask2).ToString("yyyy-MM-dd")
         validDays = $validDays.ToString() # computed value
         expiryType = $expiryType # computed value
         scriptName = $scriptName # computed value
-        taskDetails = $taskDetails.ToString() # computed value
         durationInSeconds = $durationInSeconds # computed value
     }
     
@@ -266,7 +269,6 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
     $allAcctDetails += $acctDetails
 }
 
-
 # Send each account detail to New Relic if there are
 if ($allAcctDetails -eq $null -or $allAcctDetails.Count -eq 0) {
     $endTime = Get-Date # End the timer for this account
@@ -280,10 +282,14 @@ if ($allAcctDetails -eq $null -or $allAcctDetails.Count -eq 0) {
         passwordExpiration = "N/A"
         lastPasswordChange = "N/A"
         osVersion = "N/A"
+        accountDesc = "N/A"
+        lastResultTask1 = $lastResultTask1
+        lastRunTimeTask1 = (Get-Date $lastRunTimeTask1).ToString("yyyy-MM-dd")
+        lastResultTask2 = $lastResultTask2
+        lastRunTimeTask2 = (Get-Date $lastRunTimeTask2).ToString("yyyy-MM-dd")
         validDays = "N/A"
         expiryType = "No service accounts expiring in 90 days"
         scriptName = $scriptName
-        taskDetails = $taskDetails
         durationInSeconds = $durationInSeconds
     }
 
