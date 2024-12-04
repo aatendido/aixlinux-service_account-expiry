@@ -4,7 +4,7 @@
 # Define constants
 $currentDate = (Get-Date).ToString('yyyyMMdd')
 $currentDateObj = Get-Date
-$workingDir = 'D:\P2GJOB\cyberark\Results'
+$workingDir = 'C:\Program Files\New Relic\newrelic-infra\integrations.d'
 $csvPath1 = "$workingDir\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_${currentDate}.csv"
 $csvPath2 = "$workingDir\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_${currentDate}_part2.csv"
 $outputPath = "$workingDir\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_${currentDate}_combined.csv" # to save combined part 1 and part 2 files data into, but not used by the script for now
@@ -191,7 +191,7 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
     if (($accountStatus -notlike '*Active*') -or 
         (($osVersion -like '*Linux*' -or $osVersion -like '*Ubuntu*') -and $passwordExpiration -ne 365) -or 
         ($osVersion -like '*AIX*' -and $passwordExpiration -ne 52)) {
-        #Write-Host "Skipping this line: $($_.ToString())"
+        Write-Host "Skipping this line: $($_.ToString())"
         return
     }
 
@@ -215,17 +215,17 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
 
     # Skip lines where passwordExpiration is -1 or 99999, these are service accounts whose passwords do not expire
     if ($passwordExpiration -eq -1 -or $passwordExpiration -eq 99999) {
-        #Write-Host "Skipping line with passwordExpiration: $passwordExpiration"
+        Write-Host "Skipping line with passwordExpiration: $passwordExpiration"
         return
     }
     #Write-Host "fields[8]: $($fields[8])" # debug script
 
     # Calculate the valid days
     $validDays = Calculate-ValidDays -lastPasswordChange $lastPasswordChangeDate -passwordExpiration $passwordExpiration -osVersion $($fields[8])
-    #Write-Host "validDays: $validDays" # debug script
+    Write-Host "validDays: $validDays" # debug script
 
     if ($validDays -gt 90) {  # Skip lines where validDays is greater than 90
-        #Write-Host "Skipping $validDays of $hostName..."
+         Write-Host "Skipping $validDays of $hostName..."
         return
     }
 
@@ -257,14 +257,14 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
         scriptName = $scriptName # computed value
         durationInSeconds = $durationInSeconds # computed value
     }
-    <#
+    
+    #Write-Output $acctDetails # debug script
     Write-Host "======"
     foreach ($key in $acctDetails.Keys) {
         Write-Host "$($key): $($acctDetails[$($key)])"
     }
     Write-Host "======"
-    #>
-    
+
     # Add the account details to the outer array
     $allAcctDetails += $acctDetails
 }
