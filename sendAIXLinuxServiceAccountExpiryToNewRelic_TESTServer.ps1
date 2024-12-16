@@ -5,9 +5,10 @@
 $currentDate = (Get-Date).ToString('yyyyMMdd')
 $currentDateObj = Get-Date
 $workingDir = 'C:\Program Files\New Relic\newrelic-infra\integrations.d'
-$csvPath1 = "$workingDir\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_${currentDate}.csv"
-$csvPath2 = "$workingDir\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_${currentDate}_part2.csv"
-$outputPath = "$workingDir\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_${currentDate}_combined.csv" # to save combined part 1 and part 2 files data into, but not used by the script for now
+$sourceFileDir = 'C:\Program Files\New Relic\newrelic-infra\integrations.d'
+$csvPath1 = "$sourceFileDir\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_${currentDate}.csv"
+$csvPath2 = "$sourceFileDir\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_${currentDate}_part2.csv"
+#$outputPath = "$workingDir\AIX_Linux_UserAcc_Check_Report_MMDDYYYY_${currentDate}_combined.csv" # to save combined part 1 and part 2 files data into, but not used by the script for now
 $eventType = "AIXLinuxSvcAcct" # name of the New Relic table that will contain the cert data gathered by this script
 $eventTypeTest = "AIXLinuxSvcAcctTestOnly"
 $nrPreprodAcctId = "1737703"
@@ -28,7 +29,7 @@ function Send-AcctDetailsToNewRelic {
     )
 
     $jsonData = $acctDetails | ConvertTo-Json
-    #echo "JSON data: $jsonData" # debug script
+    #Write-Host "JSON data: $jsonData" # debug script
 
     try {
         # Define headers as a dictionary
@@ -39,7 +40,7 @@ function Send-AcctDetailsToNewRelic {
 
         # Send the POST request using Invoke-RestMethod
         $response = Invoke-RestMethod -Uri $URL -Method Post -Body $jsonData -Headers $headers -Verbose # note to self: remove '-Verbose' when test is complete
-        #echo "response: $response" # debug script
+        #Write-Host "response: $response" # debug script
 
         # Append the response from the server to a file i.e. filename of this script with current system time, located in $logFilePath
         ("Response from server for {0}: {1}" -f $acctDetails.hostName, $response) | Out-File -FilePath $logFileName -Append
@@ -93,7 +94,6 @@ function Calculate-ValidDays {
     return ($expirationDate - (Get-Date)).Days
 }
 
-
 # Change to the working directory
 Set-Location -Path $workingDir
 
@@ -107,11 +107,11 @@ if ($args.Count -ne 1 -and $args.Count -ne 2) {
 $environment = $args[0]
 switch ($environment) {
     'PROD' {
-        $apiKey = $env:nrProdSecret
+        $apiKey = "cfc7194e3f49cac353913f8afc0a5379FFFFNRAL"
         $nrEnv = $nrProdAcctId
     }
     'PREPROD' {
-        $apiKey = $env:nrPreprodSecret
+        $apiKey = "71ba23ad8203901b5cac727f4c02c795FFFFNRAL"
         $nrEnv = $nrPreprodAcctId
     }
     default {
@@ -124,14 +124,14 @@ if (-not $apiKey) {
     Write-Host "Error: Environment variable for $environment is not set."
     exit 1
 }
-#echo "apiKey: $apiKey" # debug script
-#echo "nrEnv: $nrEnv" # debug script
+#Write-Host "apiKey: $apiKey" # debug script
+#Write-Host "nrEnv: $nrEnv" # debug script
 
 # Check if the 'test' argument is provided (which will change the NR table where data will be stored)
 if ($args.Count -eq 2 -and $args -eq 'test') {
     $eventType = $eventTypeTest
 }
-#echo "eventType: $eventType" # debug script
+#Write-Host "eventType: $eventType" # debug script
 
 $startTime = Get-Date # Start timer (to compute durationInSeconds)
 $errorMessages = @()
@@ -152,9 +152,9 @@ try {
 }
 
 $combinedContent = $processedContent1 + "`n" + $processedContent2
-$lines = $combinedContent -split "`n"; $lines | Out-File -FilePath $outputPath -Encoding UTF8
-#echo "lines: $lines" # debug script
-#echo "lines.Length: $($lines.Length)" # debug script
+$lines = $combinedContent -split "`n";# $lines | Out-File -FilePath $outputPath -Encoding UTF8
+#Write-Host "lines: $lines" # debug script
+Write-Host "lines.Length: $($lines.Length)" # debug script
 
 # Get Last Result (exit code) and Last Run Time of Windows Scheduler tasks that produces the 2 service account expiry files
 $lastResultTask1 = ""
@@ -162,47 +162,46 @@ $lastRunTimeTask1 = ""
 $schTask1Details = schtasks /query /fo LIST /v /tn $task1Name
 $lastResultTask1 = ($schTask1Details | Select-String -Pattern "Last Result:") -split ":\s+" | Select-Object -Last 1
 $lastRunTimeTask1 = ($schTask1Details | Select-String -Pattern "Last Run Time:") -split ":\s+" | Select-Object -Last 1
-#echo "lastResultTask1: $lastResultTask1" # debug script
-#echo "lastRunTimeTask1: (Get-Date $lastRunTimeTask1).ToString("yyyy-MM-dd")" # debug script
+#Write-Host "lastResultTask1: $lastResultTask1" # debug script
+#Write-Host "lastRunTimeTask1: $lastRunTimeTask1" # debug script
 
 $lastResultTask2 = ""
 $lastRunTimeTask2 = ""
 $schTask2Details = schtasks /query /fo LIST /v /tn $task2Name
 $lastResultTask2 = ($schTask2Details | Select-String -Pattern "Last Result:") -split ":\s+" | Select-Object -Last 1
 $lastRunTimeTask2 = ($schTask2Details | Select-String -Pattern "Last Run Time:") -split ":\s+" | Select-Object -Last 1
-#echo "lastResultTask2: $lastResultTask2" # debug script
-#echo "lastRunTimeTask2: (Get-Date $lastRunTimeTask2).ToString("yyyy-MM-dd")" # debug script
+#Write-Host "lastResultTask2: $lastResultTask2" # debug script
+#Write-Host "lastRunTimeTask2: (Get-Date $lastRunTimeTask2).ToString("yyyy-MM-dd")" # debug script
 
 # Check each line of the max age data and filter out non-data and non-expiring accounts
 $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
-    
     $fields = $_ -split '::'
-
     $hostName = $fields[0]
-    #Write-Host "hostName: $hostName" # debug script
-
-    # Extract relevant fields
     $accountStatus = $fields[11]
     $osVersion = $fields[8]
-    #Write-Host "fields[3]: $($fields[3])" # debug script
     $passwordExpiration = [int]$($fields[3]).Trim()
+    $lastPasswordChangeStr = $fields[4]
 
-    # Skip lines based on the specified condition
-    if (($accountStatus -notlike '*Active*') -or 
+    # Skip lines based on the conditions
+    # Skip if not active
+    # Skip if non-expiring
+    # Skip if not 365 or 52
+
+    if (($accountStatus -notlike '*Active*') -or ($passwordExpiration -eq -1 -or $passwordExpiration -eq 99999) -or ($lastPasswordChangeStr -like '*-never-*') -or 
         (($osVersion -like '*Linux*' -or $osVersion -like '*Ubuntu*') -and $passwordExpiration -ne 365) -or 
         ($osVersion -like '*AIX*' -and $passwordExpiration -ne 52)) {
-        Write-Host "Skipping this line: $($_.ToString())"
+        #Write-Host "Skipping this line: $fields"
         return
     }
 
     # Parse the lastPasswordChange date string to a DateTime object
     try {
-        $lastPasswordChangeDate = [datetime]::ParseExact($($fields[4]), "dd-MMM-yyyy", $null)
+        $lastPasswordChangeDate = [datetime]::ParseExact($($fields[4]), "d-MMM-yyyy", $null)
         #Write-Host "Parsed last password change date: $lastPasswordChangeDate"
     } catch {
-        Write-Host "Error parsing last password change date: $_"
+        Write-Host "Error parsing last password change date: $lastPasswordChangeDate"
     }
-    #echo "lastPasswordChangeDate: $lastPasswordChangeDate" # debug script
+    #Write-Host "lastPasswordChangeDate: $lastPasswordChangeDate" # debug script
 
     # Ensure passwordExpiration is an integer
     try {
@@ -211,21 +210,14 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
     } catch {
         Write-Host "Error parsing password expiration: $_"
     }
-    #echo "passwordExpiration: $passwordExpiration" # debug script
-
-    # Skip lines where passwordExpiration is -1 or 99999, these are service accounts whose passwords do not expire
-    if ($passwordExpiration -eq -1 -or $passwordExpiration -eq 99999) {
-        Write-Host "Skipping line with passwordExpiration: $passwordExpiration"
-        return
-    }
-    #Write-Host "fields[8]: $($fields[8])" # debug script
+    #Write-Host "passwordExpiration: $passwordExpiration" # debug script
 
     # Calculate the valid days
     $validDays = Calculate-ValidDays -lastPasswordChange $lastPasswordChangeDate -passwordExpiration $passwordExpiration -osVersion $($fields[8])
-    Write-Host "validDays: $validDays" # debug script
+    #Write-Host "validDays: $validDays" # debug script
 
     if ($validDays -gt 90) {  # Skip lines where validDays is greater than 90
-         Write-Host "Skipping $validDays of $hostName..."
+        #Write-Host "Skipping $validDays of $hostName..."
         return
     }
 
@@ -245,7 +237,7 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
         ipAddress = $fields[1]
         userId = $fields[2]
         passwordExpiration = $fields[3]
-        lastPasswordChange = [datetime]::ParseExact($fields[4], "dd-MMM-yyyy", $null).ToString("yyyy-MM-dd")
+        lastPasswordChange = [datetime]::ParseExact($fields[4], "d-MMM-yyyy", $null).ToString("yyyy-MM-dd")
         accountDesc = $fields[6]
         osVersion = $osVersion
         lastResultTask1 = $lastResultTask1
@@ -257,17 +249,19 @@ $dataLines = $lines[0..($($lines.Length) - 1)] | ForEach-Object {
         scriptName = $scriptName # computed value
         durationInSeconds = $durationInSeconds # computed value
     }
-    
-    #Write-Output $acctDetails # debug script
+    <#
     Write-Host "======"
     foreach ($key in $acctDetails.Keys) {
         Write-Host "$($key): $($acctDetails[$($key)])"
     }
     Write-Host "======"
-
+    #>
+    
     # Add the account details to the outer array
     $allAcctDetails += $acctDetails
 }
+
+Write-Host "TOTAL LINES TO SEND IS: $($allAcctDetails.Length)"
 
 # Send each account detail to New Relic if there are
 if ($allAcctDetails -eq $null -or $allAcctDetails.Count -eq 0) {
